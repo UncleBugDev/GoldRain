@@ -213,8 +213,8 @@ namespace GoldRain.Core
             _audioSource.clip = GetFermenterClip() ?? GetOrCreateStreamClip();
             _audioSource.loop = true;
             _audioSource.spatialBlend = 1.0f; // 100% пространственный 3D звук
-            _audioSource.minDistance = 1.2f;
-            _audioSource.maxDistance = 14.0f;
+            _audioSource.minDistance = 0.5f;
+            _audioSource.maxDistance = 8.0f;
             _audioSource.rolloffMode = AudioRolloffMode.Linear;
             _audioSource.dopplerLevel = 0f;
             _audioSource.playOnAwake = false;
@@ -301,12 +301,12 @@ namespace GoldRain.Core
                         _audioSource.volume = 0f;
                         _audioSource.Play();
                     }
-                    _targetVolume = ModConfig.AudioVolume != null ? ModConfig.AudioVolume.Value : 0.6f;
+                    _targetVolume = (ModConfig.AudioVolume != null ? ModConfig.AudioVolume.Value : 0.35f) * 0.20f;
                 }
 
                 if (_player != null && _player == Player.m_localPlayer && ModConfig.ShowNotifications != null && ModConfig.ShowNotifications.Value)
                 {
-                    _player.Message(MessageHud.MessageType.Center, "ᚱ Облегчение...");
+                    _player.Message(MessageHud.MessageType.Center, "<color=#FFE600>Облегчение...</color>");
                 }
             }
             else
@@ -325,7 +325,7 @@ namespace GoldRain.Core
 
                 if (_player != null && _player == Player.m_localPlayer && ModConfig.ShowNotifications != null && ModConfig.ShowNotifications.Value)
                 {
-                    _player.Message(MessageHud.MessageType.TopLeft, "ᚱ Готово.");
+                    _player.Message(MessageHud.MessageType.TopLeft, "<color=#FFE600>Готово.</color>");
                 }
             }
         }
@@ -343,6 +343,11 @@ namespace GoldRain.Core
 
         private void Update()
         {
+            if (IsPeeing)
+            {
+                _targetVolume = (ModConfig.AudioVolume != null ? ModConfig.AudioVolume.Value : 0.35f) * 0.20f;
+            }
+
             // Плавное нарастание и затухание звука без хлопков, щелчков и спама
             if (_audioSource != null && _audioSource.isPlaying)
             {

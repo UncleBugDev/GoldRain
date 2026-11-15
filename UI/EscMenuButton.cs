@@ -55,18 +55,18 @@ namespace GoldRain.UI
                     }
                 }
 
-                // Устанавливаем стилизованный текст с руной
+                // Устанавливаем стилизованный текст кнопки
                 var tmp = s_buttonObj.GetComponentInChildren<TMP_Text>();
                 if (tmp != null)
                 {
-                    tmp.text = "ᚱ Золотой Дождь";
+                    tmp.text = "<color=#FFE600>Золотой Дождь</color>";
                 }
                 else
                 {
                     var txt = s_buttonObj.GetComponentInChildren<Text>();
                     if (txt != null)
                     {
-                        txt.text = "ᚱ Золотой Дождь";
+                        txt.text = "Золотой Дождь";
                     }
                 }
 

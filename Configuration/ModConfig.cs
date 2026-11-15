@@ -55,7 +55,7 @@ namespace GoldRain.Configuration
             AudioVolume = config.Bind(
                 "4. Audio",
                 "AudioVolume",
-                0.6f,
+                0.35f,
                 new ConfigDescription("Volume of the 3D streaming sound effect.", new AcceptableValueRange<float>(0.0f, 1.0f))
             );
 

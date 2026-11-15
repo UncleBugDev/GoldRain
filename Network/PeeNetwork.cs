@@ -98,7 +98,7 @@ namespace GoldRain.Network
                         {
                             MessageHud.instance?.ShowMessage(
                                 MessageHud.MessageType.Center,
-                                "<color=#FFE600>ᚱ Вас обмочили! (Золотой дождь)</color>"
+                                "<color=#FFE600>Вас обмочили! (Золотой дождь)</color>"
                             );
                         }
                     }

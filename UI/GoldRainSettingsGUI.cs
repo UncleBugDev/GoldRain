@@ -205,7 +205,7 @@ namespace GoldRain.UI
                 748192,
                 m_windowRect,
                 DrawWindowContent,
-                "ᚱ Золотой Дождь — Настройки",
+                "Золотой Дождь — Настройки",
                 m_windowStyle
             );
         }
@@ -352,7 +352,7 @@ namespace GoldRain.UI
                 ModConfig.PeeHotkey.Value = KeyCode.P;
                 ModConfig.PeeMode.Value = PeeMode.Toggle;
                 ModConfig.StreamForce.Value = 3.0f;
-                ModConfig.AudioVolume.Value = 0.6f;
+                ModConfig.AudioVolume.Value = 0.35f;
                 ModConfig.ShowNotifications.Value = true;
                 ModConfig.Save();
             }
