@@ -1,0 +1,9 @@
+{
+  "name": "GoldRain",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/UncleBugDev/GoldRain",
+  "description": "Piss mechanic for Valheim with GTA San Andreas style posture, optimized golden arc physics, 3D audio, multiplayer sync, and in-game ESC menu keybind config.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2202"
+  ]
+}
