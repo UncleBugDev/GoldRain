@@ -150,58 +150,55 @@ namespace GoldRain.Core
             var main = _particleSystem.main;
             main.duration = 1.0f;
             main.loop = true;
-            // Уменьшенное время жизни: струя долетает до земли и быстро исчезает
-            main.startLifetime = 0.65f;
+            main.startLifetime = 1.0f;
             float force = (ModConfig.StreamForce != null) ? ModConfig.StreamForce.Value : 3.0f;
             main.startSpeed = force;
-            main.startSize = new ParticleSystem.MinMaxCurve(0.04f, 0.065f);
-            main.gravityModifier = 1.25f;
+            main.startSize = new ParticleSystem.MinMaxCurve(0.045f, 0.075f);
+            main.gravityModifier = 1.15f;
             main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 40;
+            main.maxParticles = 50;
             main.playOnAwake = false;
 
             // 3. Эмиссия частиц (Emission Module)
             var emission = _particleSystem.emission;
             emission.enabled = true;
-            emission.rateOverTime = 36f;
+            emission.rateOverTime = 38f;
 
             // 4. Форма конуса (Shape Module)
             var shape = _particleSystem.shape;
             shape.enabled = true;
             shape.shapeType = ParticleSystemShapeType.Cone;
-            shape.angle = 1.8f;
-            shape.radius = 0.012f;
+            shape.angle = 2.0f;
+            shape.radius = 0.015f;
 
-            // 5. Цвет по времени жизни: быстрое затухание прозрачности к концу полета
+            // 5. Цвет по времени жизни: градиент от золотисто-желтого #FFE600 до янтарного #FFB700 с затуханием
             var col = _particleSystem.colorOverLifetime;
             col.enabled = true;
             Gradient grad = new Gradient();
             grad.SetKeys(
                 new GradientColorKey[] {
                     new GradientColorKey(new Color(1.0f, 0.902f, 0.0f), 0.0f), // #FFE600
-                    new GradientColorKey(new Color(1.0f, 0.718f, 0.0f), 0.5f), // #FFB700
+                    new GradientColorKey(new Color(1.0f, 0.718f, 0.0f), 0.7f), // #FFB700
                     new GradientColorKey(new Color(0.95f, 0.65f, 0.0f), 1.0f)
                 },
                 new GradientAlphaKey[] {
                     new GradientAlphaKey(0.92f, 0.0f),
-                    new GradientAlphaKey(0.75f, 0.5f),
-                    new GradientAlphaKey(0.20f, 0.8f),                         // резкий спад прозрачности
-                    new GradientAlphaKey(0.0f, 1.0f)                           // полное исчезновение
+                    new GradientAlphaKey(0.85f, 0.7f),
+                    new GradientAlphaKey(0.0f, 1.0f)                           // затухание в конце
                 }
             );
             col.color = new ParticleSystem.MinMaxGradient(grad);
 
-            // 6. Размер капель со временем: капли быстро уменьшаются перед исчезновением
+            // 6. Размер капель со временем
             var sol = _particleSystem.sizeOverLifetime;
             sol.enabled = true;
             AnimationCurve sizeCurve = new AnimationCurve();
-            sizeCurve.AddKey(0f, 0.7f);
+            sizeCurve.AddKey(0f, 0.6f);
             sizeCurve.AddKey(0.35f, 1.0f);
-            sizeCurve.AddKey(0.75f, 0.5f);
-            sizeCurve.AddKey(1f, 0.1f);
+            sizeCurve.AddKey(1f, 0.4f);
             sol.size = new ParticleSystem.MinMaxCurve(1.0f, sizeCurve);
 
-            // 7. Коллизии с поверхностью: при касании земли/пола частицы исчезают моментально (lifetimeLoss = 1.0)
+            // 7. Коллизии с поверхностью (Ground, Default, Piece)
             var collision = _particleSystem.collision;
             collision.enabled = true;
             collision.type = ParticleSystemCollisionType.World;
@@ -212,10 +209,10 @@ namespace GoldRain.Core
                 mask = LayerMask.GetMask("Default") | 1;
             }
             collision.collidesWith = mask;
-            collision.dampen = 1.0f;
-            collision.bounce = 0.0f;
-            collision.lifetimeLoss = 1.0f; // 100% потеря жизни при первом же контакте с землей или постройкой!
-            collision.sendCollisionMessages = false;
+            collision.dampen = 0.85f;
+            collision.bounce = 0.12f;
+            collision.lifetimeLoss = 0.25f;
+            collision.sendCollisionMessages = false; // без лишних вызовов сообщений
         }
 
         /// <summary>
@@ -280,7 +277,7 @@ namespace GoldRain.Core
             {
                 if (_particleSystem != null)
                 {
-                    _particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+                    _particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmitting);
                 }
 
                 if (_audioSource != null)
