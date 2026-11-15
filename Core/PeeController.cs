@@ -7,10 +7,11 @@ namespace GoldRain.Core
     /// <summary>
     /// Основной компонент управления механикой мочеиспускания персонажа в Valheim.
     /// Отвечает за:
-    /// 1. Процедурную позу GTA San Andreas в LateUpdate (наклоненный назад торс, руки на поясе/паху).
-    /// 2. Физический поток мочи (ParticleSystem с параболической физикой, желтым градиентом, коллизиями).
-    /// 3. Пространственный 3D звук струи (AudioSource со сгенерированным аудио-потоком).
-    /// 4. Автоматическое прерывание при движении, прыжке, атаке или получении урона.
+    /// 1. Процедурную позу в LateUpdate (руки аккуратно сложены вперед к поясу/паху, без выворачивания назад).
+    /// 2. Сплошной непрерывный поток мочи через LineRenderer (без раздельных капель) + брызги при контакте.
+    /// 3. Пространственный стабильный звук медовухи из бочки брожения (Fermenter tap) с плавным нарастанием и затуханием.
+    /// 4. Наложение статуса мокрости (Wet) и золотых капель при попадании на других игроков.
+    /// 5. Автоматическое прерывание при движении, прыжке, атаке или уроне.
     /// </summary>
     public class PeeController : MonoBehaviour
     {
@@ -29,6 +30,7 @@ namespace GoldRain.Core
 
         // Процедурные визуальные и аудио системы
         private GameObject? _streamEmitterObject;
+        private LineRenderer? _lineRenderer;
         private ParticleSystem? _particleSystem;
         private ParticleSystemRenderer? _particleRenderer;
         private Material? _streamMaterial;
@@ -38,8 +40,11 @@ namespace GoldRain.Core
         public bool IsPeeing { get; private set; }
         private float _lastHealth;
         private bool _initialized;
+        private float _targetVolume;
+        private float _lastHitSyncTime;
 
         // Общие процедурные ресурсы для минимизации нагрузки на память
+        private static AudioClip? s_fermenterClip;
         private static AudioClip? s_sharedAudioClip;
         private static Texture2D? s_sharedParticleTex;
 
@@ -84,7 +89,6 @@ namespace GoldRain.Core
                 if (_rightHand == null) _rightHand = _animator.GetBoneTransform(HumanBodyBones.RightHand);
             }
 
-            // Запасной поиск в иерархии для нечеловекоподобных ригов или модифицированных моделей
             if (_hips == null) _hips = FindBoneInChildren(transform, "hips", "pelvis");
             if (_spine == null) _spine = FindBoneInChildren(transform, "spine", "chest");
             if (_leftUpperArm == null) _leftUpperArm = FindBoneInChildren(transform, "arm_l", "leftupperarm", "shoulder_l", "upperarm.l");
@@ -120,8 +124,7 @@ namespace GoldRain.Core
         }
 
         /// <summary>
-        /// Создает процедурную систему частиц для параболического потока мочи.
-        /// Оптимизирована: максимум 50 частиц, время жизни 1.0 с, нулевая нагрузка на процессор.
+        /// Создает сплошную струю через LineRenderer и систему брызг при соприкосновении.
         /// </summary>
         private void CreateParticleStreamSystem()
         {
@@ -130,114 +133,136 @@ namespace GoldRain.Core
             _streamEmitterObject = new GameObject("GoldRain_StreamEmitter");
             _streamEmitterObject.transform.SetParent(transform, false);
 
-            _particleSystem = _streamEmitterObject.AddComponent<ParticleSystem>();
-            _particleRenderer = _streamEmitterObject.GetComponent<ParticleSystemRenderer>();
-
-            // 1. Материал со сглаженной круглой каплей
-            Shader shader = Shader.Find("Particles/Standard Unlit") 
-                         ?? Shader.Find("Sprites/Default") 
+            // 1. Материал со сглаженной текстурой жидкого золотистого потока
+            Shader shader = Shader.Find("Particles/Standard Unlit")
+                         ?? Shader.Find("Sprites/Default")
                          ?? Shader.Find("UI/Default");
             _streamMaterial = new Material(shader)
             {
                 name = "GoldRain_PeeStreamMat"
             };
             _streamMaterial.mainTexture = GetOrCreateParticleTexture();
-            _particleRenderer.material = _streamMaterial;
-            _particleRenderer.renderMode = ParticleSystemRenderMode.Billboard;
-            _particleRenderer.alignment = ParticleSystemRenderSpace.View;
 
-            // 2. Основной модуль (Main Module)
-            var main = _particleSystem.main;
-            main.duration = 1.0f;
-            main.loop = true;
-            main.startLifetime = 1.0f;
-            float force = (ModConfig.StreamForce != null) ? ModConfig.StreamForce.Value : 3.0f;
-            main.startSpeed = force;
-            main.startSize = new ParticleSystem.MinMaxCurve(0.045f, 0.075f);
-            main.gravityModifier = 1.15f;
-            main.simulationSpace = ParticleSystemSimulationSpace.World;
-            main.maxParticles = 50;
-            main.playOnAwake = false;
+            // 2. Сплошная гладкая струя (LineRenderer)
+            _lineRenderer = _streamEmitterObject.AddComponent<LineRenderer>();
+            _lineRenderer.useWorldSpace = true;
+            _lineRenderer.positionCount = 20;
+            _lineRenderer.startWidth = 0.024f;
+            _lineRenderer.endWidth = 0.042f;
+            _lineRenderer.material = _streamMaterial;
+            _lineRenderer.numCapVertices = 4;
+            _lineRenderer.numCornerVertices = 4;
+            _lineRenderer.alignment = LineAlignment.View;
+            _lineRenderer.enabled = false;
 
-            // 3. Эмиссия частиц (Emission Module)
-            var emission = _particleSystem.emission;
-            emission.enabled = true;
-            emission.rateOverTime = 38f;
-
-            // 4. Форма конуса (Shape Module)
-            var shape = _particleSystem.shape;
-            shape.enabled = true;
-            shape.shapeType = ParticleSystemShapeType.Cone;
-            shape.angle = 2.0f;
-            shape.radius = 0.015f;
-
-            // 5. Цвет по времени жизни: градиент от золотисто-желтого #FFE600 до янтарного #FFB700 с затуханием
-            var col = _particleSystem.colorOverLifetime;
-            col.enabled = true;
-            Gradient grad = new Gradient();
-            grad.SetKeys(
+            Gradient lineGrad = new Gradient();
+            lineGrad.SetKeys(
                 new GradientColorKey[] {
-                    new GradientColorKey(new Color(1.0f, 0.902f, 0.0f), 0.0f), // #FFE600
-                    new GradientColorKey(new Color(1.0f, 0.718f, 0.0f), 0.7f), // #FFB700
-                    new GradientColorKey(new Color(0.95f, 0.65f, 0.0f), 1.0f)
+                    new GradientColorKey(new Color(1.0f, 0.90f, 0.05f), 0.0f), // #FFE600
+                    new GradientColorKey(new Color(1.0f, 0.74f, 0.0f), 0.7f),  // #FFBC00
+                    new GradientColorKey(new Color(0.92f, 0.62f, 0.0f), 1.0f)
                 },
                 new GradientAlphaKey[] {
                     new GradientAlphaKey(0.92f, 0.0f),
                     new GradientAlphaKey(0.85f, 0.7f),
-                    new GradientAlphaKey(0.0f, 1.0f)                           // затухание в конце
+                    new GradientAlphaKey(0.40f, 1.0f)
                 }
             );
-            col.color = new ParticleSystem.MinMaxGradient(grad);
+            _lineRenderer.colorGradient = lineGrad;
 
-            // 6. Размер капель со временем
-            var sol = _particleSystem.sizeOverLifetime;
-            sol.enabled = true;
-            AnimationCurve sizeCurve = new AnimationCurve();
-            sizeCurve.AddKey(0f, 0.6f);
-            sizeCurve.AddKey(0.35f, 1.0f);
-            sizeCurve.AddKey(1f, 0.4f);
-            sol.size = new ParticleSystem.MinMaxCurve(1.0f, sizeCurve);
+            // 3. Брызги на месте падения струи (ParticleSystem)
+            _particleSystem = _streamEmitterObject.AddComponent<ParticleSystem>();
+            _particleRenderer = _streamEmitterObject.GetComponent<ParticleSystemRenderer>();
+            _particleRenderer.material = _streamMaterial;
+            _particleRenderer.renderMode = ParticleSystemRenderMode.Billboard;
 
-            // 7. Коллизии с поверхностью (Ground, Default, Piece)
-            var collision = _particleSystem.collision;
-            collision.enabled = true;
-            collision.type = ParticleSystemCollisionType.World;
-            collision.mode = ParticleSystemCollisionMode.Collision3D;
-            int mask = LayerMask.GetMask("terrain", "Default", "piece");
-            if (mask == 0)
-            {
-                mask = LayerMask.GetMask("Default") | 1;
-            }
-            collision.collidesWith = mask;
-            collision.dampen = 0.85f;
-            collision.bounce = 0.12f;
-            collision.lifetimeLoss = 0.25f;
-            collision.sendCollisionMessages = false; // без лишних вызовов сообщений
+            var main = _particleSystem.main;
+            main.duration = 1.0f;
+            main.loop = true;
+            main.startLifetime = 0.35f;
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.4f, 1.1f);
+            main.startSize = new ParticleSystem.MinMaxCurve(0.025f, 0.05f);
+            main.gravityModifier = 1.2f;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            main.maxParticles = 25;
+            main.playOnAwake = false;
+
+            var emission = _particleSystem.emission;
+            emission.enabled = true;
+            emission.rateOverTime = 22f;
+
+            var shape = _particleSystem.shape;
+            shape.enabled = true;
+            shape.shapeType = ParticleSystemShapeType.Cone;
+            shape.angle = 45f;
+            shape.radius = 0.04f;
+
+            var col = _particleSystem.colorOverLifetime;
+            col.enabled = true;
+            col.color = new ParticleSystem.MinMaxGradient(lineGrad);
         }
 
         /// <summary>
-        /// Создает 3D аудиосистему с процедурно сгенерированным зацикленным звуком струи.
+        /// Создает 3D аудиосистему со звуком наливающейся медовухи из бочки брожения Valheim.
         /// </summary>
         private void CreateAudioSystem()
         {
             if (_audioSource != null || _streamEmitterObject == null) return;
 
             _audioSource = _streamEmitterObject.AddComponent<AudioSource>();
-            _audioSource.clip = GetOrCreateStreamClip();
+            _audioSource.clip = GetFermenterClip() ?? GetOrCreateStreamClip();
             _audioSource.loop = true;
             _audioSource.spatialBlend = 1.0f; // 100% пространственный 3D звук
-            _audioSource.minDistance = 1.0f;
-            _audioSource.maxDistance = 15.0f;
+            _audioSource.minDistance = 1.2f;
+            _audioSource.maxDistance = 14.0f;
             _audioSource.rolloffMode = AudioRolloffMode.Linear;
             _audioSource.dopplerLevel = 0f;
             _audioSource.playOnAwake = false;
-            _audioSource.volume = ModConfig.AudioVolume != null ? ModConfig.AudioVolume.Value : 0.6f;
+            _audioSource.volume = 0f;
         }
 
-        /// <summary>
-        /// Управляет включением/выключением процесса мочеиспускания.
-        /// </summary>
-        /// <param name="state">True = начать писать, False = закончить</param>
+        private static AudioClip? GetFermenterClip()
+        {
+            if (s_fermenterClip != null) return s_fermenterClip;
+
+            try
+            {
+                if (ZNetScene.instance != null)
+                {
+                    GameObject fermenterPrefab = ZNetScene.instance.GetPrefab("fermenter");
+                    if (fermenterPrefab != null)
+                    {
+                        var comp = fermenterPrefab.GetComponent<Fermenter>();
+                        if (comp != null && comp.m_tapEffects != null && comp.m_tapEffects.m_effectPrefabs != null)
+                        {
+                            foreach (var effect in comp.m_tapEffects.m_effectPrefabs)
+                            {
+                                if (effect?.m_prefab != null)
+                                {
+                                    var zsfx = effect.m_prefab.GetComponentInChildren<ZSFX>();
+                                    if (zsfx != null && zsfx.m_audioClips != null && zsfx.m_audioClips.Length > 0)
+                                    {
+                                        s_fermenterClip = zsfx.m_audioClips[0];
+                                        return s_fermenterClip;
+                                    }
+
+                                    var src = effect.m_prefab.GetComponentInChildren<AudioSource>();
+                                    if (src != null && src.clip != null)
+                                    {
+                                        s_fermenterClip = src.clip;
+                                        return s_fermenterClip;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return null;
+        }
+
         public void SetPeeing(bool state)
         {
             if (IsPeeing == state) return;
@@ -253,19 +278,30 @@ namespace GoldRain.Core
                     _lastHealth = _player.GetHealth();
                 }
 
+                if (_lineRenderer != null)
+                {
+                    _lineRenderer.enabled = true;
+                }
+
                 if (_particleSystem != null)
                 {
-                    var main = _particleSystem.main;
-                    float force = (ModConfig.StreamForce != null) ? ModConfig.StreamForce.Value : 3.0f;
-                    main.startSpeed = force;
                     _particleSystem.Play();
                 }
 
                 if (_audioSource != null)
                 {
-                    float vol = (ModConfig.AudioVolume != null) ? ModConfig.AudioVolume.Value : 0.6f;
-                    _audioSource.volume = vol;
-                    _audioSource.Play();
+                    var clip = GetFermenterClip();
+                    if (clip != null && _audioSource.clip != clip)
+                    {
+                        _audioSource.clip = clip;
+                    }
+
+                    if (!_audioSource.isPlaying)
+                    {
+                        _audioSource.volume = 0f;
+                        _audioSource.Play();
+                    }
+                    _targetVolume = ModConfig.AudioVolume != null ? ModConfig.AudioVolume.Value : 0.6f;
                 }
 
                 if (_player != null && _player == Player.m_localPlayer && ModConfig.ShowNotifications != null && ModConfig.ShowNotifications.Value)
@@ -275,15 +311,17 @@ namespace GoldRain.Core
             }
             else
             {
-                if (_particleSystem != null)
+                if (_lineRenderer != null)
                 {
-                    _particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+                    _lineRenderer.enabled = false;
                 }
 
-                if (_audioSource != null)
+                if (_particleSystem != null)
                 {
-                    _audioSource.Stop();
+                    _particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
                 }
+
+                _targetVolume = 0f;
 
                 if (_player != null && _player == Player.m_localPlayer && ModConfig.ShowNotifications != null && ModConfig.ShowNotifications.Value)
                 {
@@ -292,9 +330,6 @@ namespace GoldRain.Core
             }
         }
 
-        /// <summary>
-        /// Останавливает мочеиспускание и при необходимости отправляет событие в сеть.
-        /// </summary>
         public void StopPeeing()
         {
             if (!IsPeeing) return;
@@ -306,11 +341,24 @@ namespace GoldRain.Core
             }
         }
 
+        private void Update()
+        {
+            // Плавное нарастание и затухание звука без хлопков, щелчков и спама
+            if (_audioSource != null && _audioSource.isPlaying)
+            {
+                _audioSource.volume = Mathf.MoveTowards(_audioSource.volume, _targetVolume, Time.deltaTime * 3.5f);
+                if (_targetVolume <= 0f && _audioSource.volume <= 0.01f)
+                {
+                    _audioSource.Stop();
+                }
+            }
+        }
+
         private void LateUpdate()
         {
             if (!IsPeeing) return;
 
-            // 1. Проверка условий авто-прерывания для локального игрока или живого персонажа
+            // 1. Проверка условий авто-прерывания
             if (_player != null)
             {
                 if (_player.IsDead())
@@ -319,7 +367,6 @@ namespace GoldRain.Core
                     return;
                 }
 
-                // Движение (скорость > 0.1)
                 Vector3 vel = _player.GetVelocity();
                 Vector3 horizontalVel = new Vector3(vel.x, 0f, vel.z);
                 if (horizontalVel.magnitude > 0.1f)
@@ -328,21 +375,18 @@ namespace GoldRain.Core
                     return;
                 }
 
-                // Прыжок или нахождение в воздухе
                 if (!_player.IsOnGround() || Mathf.Abs(vel.y) > 0.35f)
                 {
                     StopPeeing();
                     return;
                 }
 
-                // Атака или перекат
                 if (_player.InAttack() || _player.InDodge())
                 {
                     StopPeeing();
                     return;
                 }
 
-                // Получение урона
                 float currentHealth = _player.GetHealth();
                 if (currentHealth < _lastHealth - 0.05f)
                 {
@@ -353,64 +397,62 @@ namespace GoldRain.Core
                 _lastHealth = currentHealth;
             }
 
-            // 2. Наложение процедурной позы викинга (GTA San Andreas)
+            // 2. Наложение естественной позы (руки сложены вперед к поясу/паху, без выкручивания назад)
             ApplyProceduralPose();
 
-            // 3. Позиционирование источника струи мочи
+            // 3. Позиционирование источника струи
             UpdateEmitterTransform();
+
+            // 4. Расчет сплошной непрерывной струи (LineRenderer) и коллизий с землей/игроками
+            UpdateStreamArc();
         }
 
         /// <summary>
-        /// Накладывает процедурные смещения костей в стиле GTA San Andreas:
-        /// Spine отклоняется слегка назад (-6 град), руки складываются вперед и внутрь к паху/поясу.
+        /// Поворачивает плечи и локти вперед и внутрь, смыкая кисти в области пояса/гульфика.
         /// </summary>
         private void ApplyProceduralPose()
         {
-            // Отклонение позвоночника слегка назад (-6 градусов)
+            // Легкое отклонение торса назад (-5 градусов)
             if (_spine != null)
             {
-                _spine.rotation = Quaternion.AngleAxis(-6f, transform.right) * _spine.rotation;
+                _spine.rotation = Quaternion.AngleAxis(-5f, transform.right) * _spine.rotation;
             }
 
-            // Плечи/верхняя часть рук поворачиваются вперед и внутрь
+            // Плечи/верхняя часть рук: аккуратный наклон вперед и легкое сведение к центру
             if (_leftUpperArm != null)
             {
-                Quaternion rotL = Quaternion.AngleAxis(26f, transform.right) * Quaternion.AngleAxis(20f, transform.up);
+                Quaternion rotL = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(22f, transform.up);
                 _leftUpperArm.rotation = rotL * _leftUpperArm.rotation;
             }
             if (_rightUpperArm != null)
             {
-                Quaternion rotR = Quaternion.AngleAxis(26f, transform.right) * Quaternion.AngleAxis(-20f, transform.up);
+                Quaternion rotR = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(-22f, transform.up);
                 _rightUpperArm.rotation = rotR * _rightUpperArm.rotation;
             }
 
-            // Предплечья поворачиваются вверх и внутрь, смыкаясь в районе паха/пояса
+            // Предплечья/локти: сгибаются вперед и внутрь к пряжке ремня/паху
             if (_leftLowerArm != null)
             {
-                Quaternion lowerL = Quaternion.AngleAxis(35f, transform.right) * Quaternion.AngleAxis(35f, transform.up);
+                Quaternion lowerL = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(35f, transform.up);
                 _leftLowerArm.rotation = lowerL * _leftLowerArm.rotation;
             }
             if (_rightLowerArm != null)
             {
-                Quaternion lowerR = Quaternion.AngleAxis(35f, transform.right) * Quaternion.AngleAxis(-35f, transform.up);
+                Quaternion lowerR = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(-35f, transform.up);
                 _rightLowerArm.rotation = lowerR * _rightLowerArm.rotation;
             }
 
-            // Кисти рук над пряжкой пояса
+            // Кисти рук сведены перед ремнем
             if (_leftHand != null)
             {
-                _leftHand.rotation = Quaternion.AngleAxis(15f, transform.up) * _leftHand.rotation;
+                _leftHand.rotation = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(25f, transform.up) * _leftHand.rotation;
             }
             if (_rightHand != null)
             {
-                _rightHand.rotation = Quaternion.AngleAxis(-15f, transform.up) * _rightHand.rotation;
+                _rightHand.rotation = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(-25f, transform.up) * _rightHand.rotation;
             }
         }
 
-        /// <summary>
-        /// Обновляет позицию эмитера струи:
-        /// Смещение от таза вперед на 0.25м и вниз на 0.05м.
-        /// </summary>
         private void UpdateEmitterTransform()
         {
             if (_streamEmitterObject == null) return;
@@ -420,18 +462,106 @@ namespace GoldRain.Core
 
             if (_hips != null)
             {
-                basePos = _hips.position + _hips.forward * 0.25f + Vector3.down * 0.05f;
+                basePos = _hips.position + _hips.forward * 0.22f + Vector3.down * 0.05f;
                 forwardDir = _hips.forward;
             }
             else
             {
-                basePos = transform.position + Vector3.up * 0.85f + transform.forward * 0.25f + Vector3.down * 0.05f;
+                basePos = transform.position + Vector3.up * 0.85f + transform.forward * 0.22f + Vector3.down * 0.05f;
                 forwardDir = transform.forward;
             }
 
             _streamEmitterObject.transform.position = basePos;
-            // Небольшой естественный наклон параболы вниз на 12 градусов
-            _streamEmitterObject.transform.rotation = Quaternion.LookRotation(forwardDir, Vector3.up) * Quaternion.Euler(12f, 0f, 0f);
+            _streamEmitterObject.transform.rotation = Quaternion.LookRotation(forwardDir, Vector3.up) * Quaternion.Euler(14f, 0f, 0f);
+        }
+
+        /// <summary>
+        /// Формирует непрерывную баллистическую дугу струи мочи без раздельных капель.
+        /// </summary>
+        private void UpdateStreamArc()
+        {
+            if (_streamEmitterObject == null || _lineRenderer == null) return;
+
+            Vector3 startPos = _streamEmitterObject.transform.position;
+            Vector3 forward = _streamEmitterObject.transform.forward;
+            float force = ModConfig.StreamForce != null ? ModConfig.StreamForce.Value : 3.0f;
+            Vector3 vel = forward * force;
+
+            int count = 20;
+            _lineRenderer.positionCount = count;
+            Vector3 currentPos = startPos;
+            Vector3 gravity = Physics.gravity * 0.95f;
+            float dt = 0.045f;
+
+            int layerMask = LayerMask.GetMask("terrain", "Default", "piece", "character", "character_net");
+            if (layerMask == 0) layerMask = LayerMask.GetMask("Default") | 1;
+
+            bool hitFound = false;
+            Vector3 hitPoint = Vector3.zero;
+            Vector3 hitNormal = Vector3.up;
+            Collider? hitCollider = null;
+
+            for (int i = 0; i < count; i++)
+            {
+                if (!hitFound)
+                {
+                    Vector3 nextPos = currentPos + vel * dt + 0.5f * gravity * (dt * dt);
+                    vel += gravity * dt;
+
+                    Vector3 segDir = nextPos - currentPos;
+                    float segDist = segDir.magnitude;
+                    if (segDist > 0.001f && Physics.Raycast(currentPos, segDir.normalized, out RaycastHit hit, segDist, layerMask))
+                    {
+                        hitFound = true;
+                        hitPoint = hit.point;
+                        hitNormal = hit.normal;
+                        hitCollider = hit.collider;
+                        _lineRenderer.SetPosition(i, hitPoint);
+                        currentPos = hitPoint;
+                    }
+                    else
+                    {
+                        _lineRenderer.SetPosition(i, currentPos);
+                        currentPos = nextPos;
+                    }
+                }
+                else
+                {
+                    _lineRenderer.SetPosition(i, hitPoint);
+                }
+            }
+
+            // Анимация непрерывного течения струи вдоль луча
+            if (_streamMaterial != null)
+            {
+                _streamMaterial.mainTextureOffset = new Vector2(-Time.time * 6.5f, 0f);
+            }
+
+            // Позиционирование брызг в точке удара о землю
+            if (hitFound && _particleSystem != null)
+            {
+                _particleSystem.transform.position = hitPoint;
+                _particleSystem.transform.rotation = Quaternion.LookRotation(hitNormal);
+            }
+
+            // Проверка попадания на другого игрока
+            if (hitFound && hitCollider != null)
+            {
+                CheckPeeTargetHit(hitCollider);
+            }
+        }
+
+        private void CheckPeeTargetHit(Collider col)
+        {
+            var targetPlayer = col.GetComponentInParent<Player>();
+            if (targetPlayer != null && targetPlayer != _player)
+            {
+                if (Time.time > _lastHitSyncTime + 1.5f)
+                {
+                    _lastHitSyncTime = Time.time;
+                    PeeNetwork.SendPeeHit(targetPlayer);
+                }
+            }
         }
 
         private static AudioClip GetOrCreateStreamClip()
@@ -449,16 +579,12 @@ namespace GoldRain.Core
             for (int i = 0; i < samples; i++)
             {
                 float white = (float)(rand.NextDouble() * 2.0 - 1.0);
-
-                // Фильтр розового шума
                 b0 = 0.99765f * b0 + white * 0.0990460f;
                 b1 = 0.96300f * b1 + white * 0.2965164f;
                 b2 = 0.57000f * b2 + white * 1.0526913f;
                 float pink = b0 + b1 + b2 + white * 0.1848f;
 
                 float time = (float)i / sampleRate;
-
-                // Резонансы и кавитация журчащей струи
                 float mod1 = Mathf.Sin(2f * Mathf.PI * 11.2f * time) * 0.18f;
                 float mod2 = Mathf.Sin(2f * Mathf.PI * 23.7f * time) * 0.12f;
                 float mod3 = Mathf.Cos(2f * Mathf.PI * 47.1f * time) * 0.08f;
@@ -468,7 +594,6 @@ namespace GoldRain.Core
                 data[i] = Mathf.Clamp(sample, -1.0f, 1.0f);
             }
 
-            // Плавное бесшовное перекрестное затухание петли (100 мс)
             int fadeLen = (int)(sampleRate * 0.1f);
             for (int i = 0; i < fadeLen; i++)
             {
@@ -489,7 +614,7 @@ namespace GoldRain.Core
             Texture2D tex = new Texture2D(size, size, TextureFormat.RGBA32, false)
             {
                 name = "GoldRain_DropletTex",
-                wrapMode = TextureWrapMode.Clamp,
+                wrapMode = TextureWrapMode.Repeat,
                 filterMode = FilterMode.Bilinear
             };
 

@@ -12,11 +12,31 @@ namespace GoldRain.Network
     public static class PeeNetwork
     {
         public const string RPC_PEE_NAME = "RPC_GoldRain_Pee";
+        public const string RPC_PEE_HIT = "RPC_GoldRain_PeeHit";
         public const string ZDO_PEE_KEY = "GoldRain_IsPeeing";
 
         public static ZNetView? GetZNetView(Player? player)
         {
             return player != null ? player.GetComponent<ZNetView>() : null;
+        }
+
+        /// <summary>
+        /// Отправляет сетевое RPC всем клиентам о попадании мочи на другого игрока.
+        /// </summary>
+        public static void SendPeeHit(Player targetPlayer)
+        {
+            if (targetPlayer == null) return;
+            var local = Player.m_localPlayer;
+            if (local == null) return;
+
+            var nview = GetZNetView(local);
+            if (nview == null || !nview.IsOwner()) return;
+
+            ZDOID targetID = targetPlayer.GetZDOID();
+            nview.InvokeRPC(ZNetView.Everybody, RPC_PEE_HIT, targetID);
+
+            // Применяем локально без задержки
+            GoldPeeWetDrip.Apply(targetPlayer);
         }
 
         /// <summary>
@@ -61,6 +81,27 @@ namespace GoldRain.Network
                 if (controller != null)
                 {
                     controller.SetPeeing(state);
+                }
+            });
+
+            nview.Register<ZDOID>(RPC_PEE_HIT, (long sender, ZDOID targetID) =>
+            {
+                var targetObj = ZNetScene.instance?.FindInstance(targetID);
+                if (targetObj != null)
+                {
+                    var targetPl = targetObj.GetComponent<Player>();
+                    if (targetPl != null)
+                    {
+                        GoldPeeWetDrip.Apply(targetPl);
+
+                        if (targetPl == Player.m_localPlayer)
+                        {
+                            MessageHud.instance?.ShowMessage(
+                                MessageHud.MessageType.Center,
+                                "<color=#FFE600>ᚱ Вас обмочили! (Золотой дождь)</color>"
+                            );
+                        }
+                    }
                 }
             });
 

@@ -71,6 +71,12 @@ namespace GoldRain.UI
         {
             if (!m_isOpen) return;
 
+            // Сбрасываем оси ввода игры, чтобы клики не пробивались в мир или меню позади
+            if (!m_isRebinding)
+            {
+                Input.ResetInputAxes();
+            }
+
             // Удержание курсора мыши разблокированным и видимым
             ZCursor.LockState = CursorLockMode.None;
             ZCursor.Show();
@@ -144,6 +150,8 @@ namespace GoldRain.UI
             float h = Mathf.Min(560f, Screen.height - 40f);
             m_windowRect = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
 
+            SetMenuInteractable(false);
+
             ZCursor.LockState = CursorLockMode.None;
             ZCursor.Show();
         }
@@ -154,11 +162,36 @@ namespace GoldRain.UI
             m_isRebinding = false;
             ModConfig.Save();
 
+            SetMenuInteractable(true);
+
             if (Player.m_localPlayer != null && !Menu.IsVisible() && !InventoryGui.IsVisible() && !Minimap.IsOpen())
             {
                 ZCursor.LockState = CursorLockMode.Locked;
                 ZCursor.Hide();
             }
+        }
+
+        private static void SetMenuInteractable(bool state)
+        {
+            try
+            {
+                if (Menu.instance != null && Menu.instance.m_menuDialog != null)
+                {
+                    var cg = Menu.instance.m_menuDialog.GetComponent<CanvasGroup>();
+                    if (cg == null)
+                    {
+                        cg = Menu.instance.m_menuDialog.gameObject.AddComponent<CanvasGroup>();
+                    }
+                    cg.blocksRaycasts = state;
+                    cg.interactable = state;
+                }
+            }
+            catch { }
+        }
+
+        private void OnDestroy()
+        {
+            SetMenuInteractable(true);
         }
 
         private void OnGUI()
@@ -168,7 +201,7 @@ namespace GoldRain.UI
             InitStyles();
 
             GUI.depth = -1000;
-            m_windowRect = GUI.Window(
+            m_windowRect = GUI.ModalWindow(
                 748192,
                 m_windowRect,
                 DrawWindowContent,
