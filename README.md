@@ -1,6 +1,11 @@
-# Gold Rain (Золотой Дождь) ᚱ
-**GTA San Andreas Style Piss Mechanic for Valheim with Realistic Golden Arc Physics, 3D Spatial Audio, Multiplayer Sync & In-Game GUI**
+<p align="center">
+  <img src="icon.png" width="220" alt="Gold Rain Logo" style="border-radius: 14px;" />
+</p>
 
+# Gold Rain (Золотой Дождь) ᚱ
+**Viking Urination Mechanic for Valheim with Realistic Golden Arc Physics, 3D Spatial Audio, Multiplayer Sync & In-Game GUI**
+
+[![GitHub Release](https://img.shields.io/github/v/release/UncleBugDev/GoldRain?color=gold&label=Release)](https://github.com/UncleBugDev/GoldRain/releases/latest)
 [![Thunderstore Version](https://img.shields.io/badge/Thunderstore-v1.0.0-gold.svg)](https://thunderstore.io/c/valheim/p/UncleBugDev/GoldRain/)
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4.2202-blue.svg)](https://valheim.thunderstore.io/package/denikson/BepInExPack_Valheim/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
