@@ -1,3 +1,4 @@
+using System.Reflection;
 using GoldRain.Configuration;
 using GoldRain.Network;
 using UnityEngine;
@@ -42,6 +43,26 @@ namespace GoldRain.Core
         private bool _initialized;
         private float _targetVolume;
         private float _lastHitSyncTime;
+
+        // Фиксированная стабильная поза (вычисляется при старте для устранения любого дрожания аниматора)
+        private Quaternion _fixedSpineRot;
+        private Quaternion _fixedUpperArmL;
+        private Quaternion _fixedUpperArmR;
+        private Quaternion _fixedLowerArmL;
+        private Quaternion _fixedLowerArmR;
+        private Quaternion _fixedHandL;
+        private Quaternion _fixedHandR;
+        private bool _hasFixedPose;
+        private float _poseBlend;
+
+        // Плавное прицеливание струи в ограниченном переднем секторе
+        private float _currentAimYaw;
+        private float _currentAimPitch;
+
+        private static readonly MethodInfo? s_showHandItems = typeof(Humanoid).GetMethod(
+            "ShowHandItems",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public
+        );
 
         // Общие процедурные ресурсы для минимизации нагрузки на память
         private static AudioClip? s_fermenterClip;
@@ -273,10 +294,38 @@ namespace GoldRain.Core
             {
                 EnsureInitialized();
 
+                // 1. Убираем оружие/щиты из рук на пояс/за спину без анимации
+                if (_player != null && _player == Player.m_localPlayer)
+                {
+                    _player.HideHandItems(onlyRightHand: false, animation: false);
+                }
+
                 if (_player != null)
                 {
                     _lastHealth = _player.GetHealth();
                 }
+
+                // 2. Вычисляем стабильную целевую позу ОДИН РАЗ, исключая шум дыхания и аниматора
+                Quaternion spineBase = _spine != null ? _spine.rotation : transform.rotation;
+                Quaternion upperLBase = _leftUpperArm != null ? _leftUpperArm.rotation : transform.rotation;
+                Quaternion upperRBase = _rightUpperArm != null ? _rightUpperArm.rotation : transform.rotation;
+                Quaternion lowerLBase = _leftLowerArm != null ? _leftLowerArm.rotation : transform.rotation;
+                Quaternion lowerRBase = _rightLowerArm != null ? _rightLowerArm.rotation : transform.rotation;
+                Quaternion handLBase = _leftHand != null ? _leftHand.rotation : transform.rotation;
+                Quaternion handRBase = _rightHand != null ? _rightHand.rotation : transform.rotation;
+
+                _fixedSpineRot = Quaternion.AngleAxis(-5f, transform.right) * spineBase;
+                _fixedUpperArmL = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(22f, transform.up) * upperLBase;
+                _fixedUpperArmR = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(-22f, transform.up) * upperRBase;
+                _fixedLowerArmL = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(35f, transform.up) * lowerLBase;
+                _fixedLowerArmR = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(-35f, transform.up) * lowerRBase;
+                _fixedHandL = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(25f, transform.up) * handLBase;
+                _fixedHandR = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(-25f, transform.up) * handRBase;
+
+                _hasFixedPose = true;
+                _poseBlend = 0f;
+                _currentAimYaw = 0f;
+                _currentAimPitch = 0f;
 
                 if (_lineRenderer != null)
                 {
@@ -322,11 +371,28 @@ namespace GoldRain.Core
                 }
 
                 _targetVolume = 0f;
+                _hasFixedPose = false;
+                _poseBlend = 0f;
+
+                // Возвращаем предметы в руки
+                RestoreWeapons();
 
                 if (_player != null && _player == Player.m_localPlayer && ModConfig.ShowNotifications != null && ModConfig.ShowNotifications.Value)
                 {
                     _player.Message(MessageHud.MessageType.TopLeft, "<color=#FFE600>Готово.</color>");
                 }
+            }
+        }
+
+        private void RestoreWeapons()
+        {
+            if (_player != null && _player == Player.m_localPlayer)
+            {
+                try
+                {
+                    s_showHandItems?.Invoke(_player, new object[] { false, false });
+                }
+                catch { }
             }
         }
 
@@ -402,59 +468,59 @@ namespace GoldRain.Core
                 _lastHealth = currentHealth;
             }
 
-            // 2. Наложение естественной позы (руки сложены вперед к поясу/паху, без выкручивания назад)
-            ApplyProceduralPose();
-
-            // 3. Позиционирование источника струи
+            // 2. Позиционирование источника струи и расчет угла прицеливания камеры
             UpdateEmitterTransform();
+
+            // 3. Наложение естественной позы (руки удерживают струю без дрожания аниматора)
+            ApplyProceduralPose();
 
             // 4. Расчет сплошной непрерывной струи (LineRenderer) и коллизий с землей/игроками
             UpdateStreamArc();
         }
 
         /// <summary>
-        /// Поворачивает плечи и локти вперед и внутрь, смыкая кисти в области пояса/гульфика.
+        /// Удерживает руки в естественной позе перед поясом/пахом без выкручивания и дрожания аниматора.
+        /// Использует фиксированные при старте целевые ориентации и плавно следует за углом поворота струи.
         /// </summary>
         private void ApplyProceduralPose()
         {
-            // Легкое отклонение торса назад (-5 градусов)
-            if (_spine != null)
-            {
-                _spine.rotation = Quaternion.AngleAxis(-5f, transform.right) * _spine.rotation;
-            }
+            if (!_hasFixedPose) return;
 
-            // Плечи/верхняя часть рук: аккуратный наклон вперед и легкое сведение к центру
-            if (_leftUpperArm != null)
-            {
-                Quaternion rotL = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(22f, transform.up);
-                _leftUpperArm.rotation = rotL * _leftUpperArm.rotation;
-            }
-            if (_rightUpperArm != null)
-            {
-                Quaternion rotR = Quaternion.AngleAxis(-28f, transform.right) * Quaternion.AngleAxis(-22f, transform.up);
-                _rightUpperArm.rotation = rotR * _rightUpperArm.rotation;
-            }
+            // Плавный вход в позу (за ~0.1 сек)
+            _poseBlend = Mathf.MoveTowards(_poseBlend, 1f, Time.deltaTime * 10f);
 
-            // Предплечья/локти: сгибаются вперед и внутрь к пряжке ремня/паху
-            if (_leftLowerArm != null)
-            {
-                Quaternion lowerL = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(35f, transform.up);
-                _leftLowerArm.rotation = lowerL * _leftLowerArm.rotation;
-            }
-            if (_rightLowerArm != null)
-            {
-                Quaternion lowerR = Quaternion.AngleAxis(-65f, transform.right) * Quaternion.AngleAxis(-35f, transform.up);
-                _rightLowerArm.rotation = lowerR * _rightLowerArm.rotation;
-            }
+            // Поворот туловища и рук вслед за направлением струи (до ±19 градусов)
+            Quaternion aimYawTurn = Quaternion.AngleAxis(_currentAimYaw * 0.35f, transform.up);
+            Quaternion aimPitchTilt = Quaternion.AngleAxis(_currentAimPitch * 0.15f, transform.right);
+            Quaternion aimPoseRot = aimYawTurn * aimPitchTilt;
 
-            // Кисти рук сведены перед ремнем
-            if (_leftHand != null)
+            Quaternion targetSpine = aimPoseRot * _fixedSpineRot;
+            Quaternion targetUpperL = aimPoseRot * _fixedUpperArmL;
+            Quaternion targetUpperR = aimPoseRot * _fixedUpperArmR;
+            Quaternion targetLowerL = aimPoseRot * _fixedLowerArmL;
+            Quaternion targetLowerR = aimPoseRot * _fixedLowerArmR;
+            Quaternion targetHandL = aimPoseRot * _fixedHandL;
+            Quaternion targetHandR = aimPoseRot * _fixedHandR;
+
+            if (_poseBlend >= 0.999f)
             {
-                _leftHand.rotation = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(25f, transform.up) * _leftHand.rotation;
+                if (_spine != null) _spine.rotation = targetSpine;
+                if (_leftUpperArm != null) _leftUpperArm.rotation = targetUpperL;
+                if (_rightUpperArm != null) _rightUpperArm.rotation = targetUpperR;
+                if (_leftLowerArm != null) _leftLowerArm.rotation = targetLowerL;
+                if (_rightLowerArm != null) _rightLowerArm.rotation = targetLowerR;
+                if (_leftHand != null) _leftHand.rotation = targetHandL;
+                if (_rightHand != null) _rightHand.rotation = targetHandR;
             }
-            if (_rightHand != null)
+            else
             {
-                _rightHand.rotation = Quaternion.AngleAxis(-15f, transform.right) * Quaternion.AngleAxis(-25f, transform.up) * _rightHand.rotation;
+                if (_spine != null) _spine.rotation = Quaternion.Slerp(_spine.rotation, targetSpine, _poseBlend);
+                if (_leftUpperArm != null) _leftUpperArm.rotation = Quaternion.Slerp(_leftUpperArm.rotation, targetUpperL, _poseBlend);
+                if (_rightUpperArm != null) _rightUpperArm.rotation = Quaternion.Slerp(_rightUpperArm.rotation, targetUpperR, _poseBlend);
+                if (_leftLowerArm != null) _leftLowerArm.rotation = Quaternion.Slerp(_leftLowerArm.rotation, targetLowerL, _poseBlend);
+                if (_rightLowerArm != null) _rightLowerArm.rotation = Quaternion.Slerp(_rightLowerArm.rotation, targetLowerR, _poseBlend);
+                if (_leftHand != null) _leftHand.rotation = Quaternion.Slerp(_leftHand.rotation, targetHandL, _poseBlend);
+                if (_rightHand != null) _rightHand.rotation = Quaternion.Slerp(_rightHand.rotation, targetHandR, _poseBlend);
             }
         }
 
@@ -462,22 +528,60 @@ namespace GoldRain.Core
         {
             if (_streamEmitterObject == null) return;
 
-            Vector3 basePos;
-            Vector3 forwardDir;
+            Vector3 bodyForward = transform.forward;
+            Vector3 bodyUp = transform.up;
 
-            if (_hips != null)
+            // Определяем направление взгляда игрока (камера для локального игрока, m_lookDir для коопа)
+            Vector3 lookDir;
+            if (_player == Player.m_localPlayer && GameCamera.instance != null)
             {
-                basePos = _hips.position + _hips.forward * 0.22f + Vector3.down * 0.05f;
-                forwardDir = _hips.forward;
+                lookDir = GameCamera.instance.transform.forward;
             }
             else
             {
-                basePos = transform.position + Vector3.up * 0.85f + transform.forward * 0.22f + Vector3.down * 0.05f;
-                forwardDir = transform.forward;
+                lookDir = _player != null ? _player.GetLookDir() : bodyForward;
+            }
+
+            // Горизонтальный азимут
+            Vector3 lookHoriz = Vector3.ProjectOnPlane(lookDir, bodyUp).normalized;
+            Vector3 bodyHoriz = Vector3.ProjectOnPlane(bodyForward, bodyUp).normalized;
+
+            float yawAngle = 0f;
+            if (lookHoriz.sqrMagnitude > 0.001f && bodyHoriz.sqrMagnitude > 0.001f)
+            {
+                yawAngle = Vector3.SignedAngle(bodyHoriz, lookHoriz, bodyUp);
+            }
+
+            // Ограничение: управляемый малый сектор спереди (±55 градусов)
+            // Игрок НЕ может писать назад за спину при взгляде назад
+            float targetAimYaw = Mathf.Clamp(yawAngle, -55f, 55f);
+
+            // Вертикальный наклон: от -35 градусов (вниз под ноги) до +15 градусов (вдаль)
+            float pitchAngle = Mathf.Asin(Mathf.Clamp(lookDir.y, -0.99f, 0.99f)) * Mathf.Rad2Deg;
+            float targetAimPitch = Mathf.Clamp(pitchAngle, -35f, 15f);
+
+            // Плавное следование за камерой с комфортной скоростью
+            _currentAimYaw = Mathf.MoveTowardsAngle(_currentAimYaw, targetAimYaw, Time.deltaTime * 180f);
+            _currentAimPitch = Mathf.MoveTowards(_currentAimPitch, targetAimPitch, Time.deltaTime * 120f);
+
+            // Итоговый угол струи (с добавлением +10 градусов для красивой баллистической дуги)
+            float finalPitch = _currentAimPitch + 10f;
+            Quaternion aimRotation = Quaternion.LookRotation(bodyHoriz, bodyUp) * Quaternion.Euler(-finalPitch, _currentAimYaw, 0f);
+
+            // Позиция источника струи у паха
+            Vector3 aimHorizDir = Quaternion.AngleAxis(_currentAimYaw * 0.35f, bodyUp) * bodyHoriz;
+            Vector3 basePos;
+            if (_hips != null)
+            {
+                basePos = _hips.position + aimHorizDir * 0.22f + Vector3.down * 0.05f;
+            }
+            else
+            {
+                basePos = transform.position + Vector3.up * 0.85f + aimHorizDir * 0.22f + Vector3.down * 0.05f;
             }
 
             _streamEmitterObject.transform.position = basePos;
-            _streamEmitterObject.transform.rotation = Quaternion.LookRotation(forwardDir, Vector3.up) * Quaternion.Euler(14f, 0f, 0f);
+            _streamEmitterObject.transform.rotation = aimRotation;
         }
 
         /// <summary>
@@ -515,14 +619,35 @@ namespace GoldRain.Core
 
                     Vector3 segDir = nextPos - currentPos;
                     float segDist = segDir.magnitude;
-                    if (segDist > 0.001f && Physics.Raycast(currentPos, segDir.normalized, out RaycastHit hit, segDist, layerMask))
+                    if (segDist > 0.001f)
                     {
-                        hitFound = true;
-                        hitPoint = hit.point;
-                        hitNormal = hit.normal;
-                        hitCollider = hit.collider;
-                        _lineRenderer.SetPosition(i, hitPoint);
-                        currentPos = hitPoint;
+                        RaycastHit[] hits = Physics.RaycastAll(currentPos, segDir.normalized, segDist, layerMask);
+                        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+                        foreach (var hit in hits)
+                        {
+                            // Игнорируем коллайдеры собственного тела/брони
+                            if (hit.collider != null && hit.collider.transform.root == transform.root)
+                            {
+                                continue;
+                            }
+
+                            hitFound = true;
+                            hitPoint = hit.point;
+                            hitNormal = hit.normal;
+                            hitCollider = hit.collider;
+                            break;
+                        }
+
+                        if (hitFound)
+                        {
+                            _lineRenderer.SetPosition(i, hitPoint);
+                            currentPos = hitPoint;
+                        }
+                        else
+                        {
+                            _lineRenderer.SetPosition(i, currentPos);
+                            currentPos = nextPos;
+                        }
                     }
                     else
                     {
@@ -565,6 +690,21 @@ namespace GoldRain.Core
                 {
                     _lastHitSyncTime = Time.time;
                     PeeNetwork.SendPeeHit(targetPlayer);
+                }
+                return;
+            }
+
+            var character = col.GetComponentInParent<Character>();
+            if (character != null && character != _player)
+            {
+                if (Time.time > _lastHitSyncTime + 1.5f)
+                {
+                    _lastHitSyncTime = Time.time;
+                    var seman = character.GetSEMan();
+                    if (seman != null && !seman.HaveStatusEffect("Wet".GetStableHashCode()))
+                    {
+                        seman.AddStatusEffect("Wet".GetStableHashCode(), resetTime: true);
+                    }
                 }
             }
         }
