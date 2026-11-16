@@ -340,6 +340,26 @@ namespace GoldRain.UI
             }
             GUILayout.EndVertical();
 
+            GUILayout.Space(8);
+
+            // СЕКЦИЯ 5: БЛАГОДАРНОСТИ И АВТОРЫ ИДЕИ
+            GUILayout.BeginVertical(m_boxStyle);
+            GUILayout.Label("<b>5. Благодарности и ссылки</b>", m_subHeaderStyle);
+            GUILayout.Label("Мод сделан благодаря стримеру <b><color=#A970FF>DaymonMontage</color></b>", m_labelStyle);
+            GUILayout.Space(4);
+
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("<b>Twitch: daymonmontage</b>", m_buttonStyle, GUILayout.Height(30)))
+            {
+                Application.OpenURL("https://www.twitch.tv/daymonmontage");
+            }
+            if (GUILayout.Button("<b>Хаб: daymon-site</b>", m_buttonStyle, GUILayout.Height(30)))
+            {
+                Application.OpenURL("https://daymonmontage.github.io/daymon-site/");
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndVertical();
+
             GUILayout.EndScrollView();
 
             GUILayout.Space(8);

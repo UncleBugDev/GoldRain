@@ -118,5 +118,13 @@ ShowNotifications = true
 
 ---
 
+## 💜 Благодарности и авторы идеи / Credits & Acknowledgements
+
+Мод создан и воплощён в жизнь благодаря идеям, поддержке и вдохновению стримера **DaymonMontage**:
+* 🎮 **Twitch канал:** [twitch.tv/daymonmontage](https://www.twitch.tv/daymonmontage)
+* 🌐 **Хаб и сайт Daymon:** [daymonmontage.github.io/daymon-site/](https://daymonmontage.github.io/daymon-site/)
+
+---
+
 ## 📄 License
 Released under the [MIT License](https://opensource.org/licenses/MIT). Created by **UncleBugDev**.
