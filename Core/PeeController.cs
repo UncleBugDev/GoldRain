@@ -344,6 +344,7 @@ namespace GoldRain.Core
                     {
                         _audioSource.clip = clip;
                     }
+                    _audioSource.loop = true;
 
                     if (!_audioSource.isPlaying)
                     {
@@ -429,43 +430,54 @@ namespace GoldRain.Core
         {
             if (!IsPeeing) return;
 
-            // 1. Проверка условий авто-прерывания
+            // 1. Проверка условий авто-прерывания (только реальные действия, без ложных срабатываний)
             if (_player != null)
             {
-                if (_player.IsDead())
+                if (_player.IsDead() || _player.IsSwimming())
                 {
                     StopPeeing();
                     return;
                 }
 
+                // Реальное намеренное движение (ходьба, бег или перемещение со скоростью > 1.2 м/с)
                 Vector3 vel = _player.GetVelocity();
                 Vector3 horizontalVel = new Vector3(vel.x, 0f, vel.z);
-                if (horizontalVel.magnitude > 0.1f)
+                bool hasMovementInput = false;
+                if (_player == Player.m_localPlayer)
+                {
+                    hasMovementInput = ZInput.GetButton("Forward") || ZInput.GetButton("Backward") ||
+                                       ZInput.GetButton("Left") || ZInput.GetButton("Right");
+                }
+
+                if ((hasMovementInput && horizontalVel.magnitude > 0.6f) || horizontalVel.magnitude > 1.3f || _player.IsRunning())
                 {
                     StopPeeing();
                     return;
                 }
 
-                if (!_player.IsOnGround() || Mathf.Abs(vel.y) > 0.35f)
+                // Прыжок или глубокое падение со скалы (но не покачивание на неровной земле)
+                if (vel.y > 2.8f || vel.y < -4.0f)
                 {
                     StopPeeing();
                     return;
                 }
 
+                // Боевые действия или перекат
                 if (_player.InAttack() || _player.InDodge())
                 {
                     StopPeeing();
                     return;
                 }
 
+                // Реальный полученный урон (> 1.0 HP, чтобы игнорировать таймер переваривания еды и естественные колебания)
                 float currentHealth = _player.GetHealth();
-                if (currentHealth < _lastHealth - 0.05f)
+                if (currentHealth < _lastHealth - 1.0f)
                 {
                     _lastHealth = currentHealth;
                     StopPeeing();
                     return;
                 }
-                _lastHealth = currentHealth;
+                _lastHealth = Mathf.Max(_lastHealth, currentHealth);
             }
 
             // 2. Позиционирование источника струи и расчет угла прицеливания камеры
