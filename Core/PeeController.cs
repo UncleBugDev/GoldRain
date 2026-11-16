@@ -295,7 +295,7 @@ namespace GoldRain.Core
                 EnsureInitialized();
 
                 // 1. Убираем оружие/щиты из рук на пояс/за спину без анимации
-                if (_player != null && _player == Player.m_localPlayer)
+                if (_player != null)
                 {
                     _player.HideHandItems(onlyRightHand: false, animation: false);
                 }
@@ -387,7 +387,7 @@ namespace GoldRain.Core
 
         private void RestoreWeapons()
         {
-            if (_player != null && _player == Player.m_localPlayer)
+            if (_player != null)
             {
                 try
                 {
@@ -430,7 +430,7 @@ namespace GoldRain.Core
         {
             if (!IsPeeing) return;
 
-            // 1. Проверка условий авто-прерывания (только реальные действия, без ложных срабатываний)
+            // 1. Проверка условий авто-прерывания (только для своего персонажа, без ложных сетевых прерываний)
             if (_player != null)
             {
                 if (_player.IsDead() || _player.IsSwimming())
@@ -439,45 +439,44 @@ namespace GoldRain.Core
                     return;
                 }
 
-                // Реальное намеренное движение (ходьба, бег или перемещение со скоростью > 1.2 м/с)
-                Vector3 vel = _player.GetVelocity();
-                Vector3 horizontalVel = new Vector3(vel.x, 0f, vel.z);
-                bool hasMovementInput = false;
+                // Прерывания по управлению, урону и перемещению проверяются ТОЛЬКО для локального игрока
                 if (_player == Player.m_localPlayer)
                 {
-                    hasMovementInput = ZInput.GetButton("Forward") || ZInput.GetButton("Backward") ||
-                                       ZInput.GetButton("Left") || ZInput.GetButton("Right");
-                }
+                    Vector3 vel = _player.GetVelocity();
+                    Vector3 horizontalVel = new Vector3(vel.x, 0f, vel.z);
+                    bool hasMovementInput = ZInput.GetButton("Forward") || ZInput.GetButton("Backward") ||
+                                           ZInput.GetButton("Left") || ZInput.GetButton("Right");
 
-                if ((hasMovementInput && horizontalVel.magnitude > 0.6f) || horizontalVel.magnitude > 1.3f || _player.IsRunning())
-                {
-                    StopPeeing();
-                    return;
-                }
+                    if ((hasMovementInput && horizontalVel.magnitude > 0.6f) || horizontalVel.magnitude > 1.3f || _player.IsRunning())
+                    {
+                        StopPeeing();
+                        return;
+                    }
 
-                // Прыжок или глубокое падение со скалы (но не покачивание на неровной земле)
-                if (vel.y > 2.8f || vel.y < -4.0f)
-                {
-                    StopPeeing();
-                    return;
-                }
+                    // Прыжок или глубокое падение со скалы
+                    if (vel.y > 2.8f || vel.y < -4.0f)
+                    {
+                        StopPeeing();
+                        return;
+                    }
 
-                // Боевые действия или перекат
-                if (_player.InAttack() || _player.InDodge())
-                {
-                    StopPeeing();
-                    return;
-                }
+                    // Боевые действия или перекат
+                    if (_player.InAttack() || _player.InDodge())
+                    {
+                        StopPeeing();
+                        return;
+                    }
 
-                // Реальный полученный урон (> 1.0 HP, чтобы игнорировать таймер переваривания еды и естественные колебания)
-                float currentHealth = _player.GetHealth();
-                if (currentHealth < _lastHealth - 1.0f)
-                {
-                    _lastHealth = currentHealth;
-                    StopPeeing();
-                    return;
+                    // Реальный полученный урон (> 1.0 HP)
+                    float currentHealth = _player.GetHealth();
+                    if (currentHealth < _lastHealth - 1.0f)
+                    {
+                        _lastHealth = currentHealth;
+                        StopPeeing();
+                        return;
+                    }
+                    _lastHealth = Mathf.Max(_lastHealth, currentHealth);
                 }
-                _lastHealth = Mathf.Max(_lastHealth, currentHealth);
             }
 
             // 2. Позиционирование источника струи и расчет угла прицеливания камеры
@@ -695,6 +694,9 @@ namespace GoldRain.Core
 
         private void CheckPeeTargetHit(Collider col)
         {
+            // Проверку попадания струи производит ТОЛЬКО стреляющий владелец (локальный игрок)
+            if (_player == null || _player != Player.m_localPlayer) return;
+
             var targetPlayer = col.GetComponentInParent<Player>();
             if (targetPlayer != null && targetPlayer != _player)
             {
