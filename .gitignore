@@ -12,3 +12,5 @@ package/
 # Decompiled research files
 *_decompiled.cs
 decompiled/
+
+build/

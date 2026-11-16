@@ -1,0 +1,35 @@
+[config]
+schemaVersion = "0.0.1"
+
+[package]
+namespace = "UncleBugDev"
+name = "GoldRain"
+versionNumber = "1.0.0"
+description = "Piss mechanic for Valheim. Created thanks to DaymonMontage (twitch.tv/daymonmontage). GTA SA style posture, golden arc physics, 3D audio, sync & GUI."
+websiteUrl = "https://github.com/UncleBugDev/GoldRain"
+containsNsfwContent = false
+
+[package.dependencies]
+denikson-BepInExPack_Valheim = "5.4.2202"
+
+[build]
+icon = "./icon.png"
+readme = "./README.md"
+outdir = "./build"
+
+[[build.copy]]
+source = "./bin/Release/netstandard2.1/GoldRain.dll"
+target = "GoldRain.dll"
+
+[[build.copy]]
+source = "./CHANGELOG.md"
+target = "CHANGELOG.md"
+
+[publish]
+repository = "https://thunderstore.io"
+communities = [ "valheim" ]
+
+[publish.categories]
+valheim = [ "client-side", "server-side", "cosmetic", "tools" ]
+
+
